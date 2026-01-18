@@ -31,6 +31,7 @@ import com.hypixel.hytale.math.vector.Vector3d;
 import javax.annotation.Nonnull;
 import java.util.ArrayList;
 import java.util.Set;
+import com.hypixel.hytale.server.core.entity.entities.player.movement.MovementManager;
 import java.util.List;
 
 public class AnticheatSystem {
@@ -38,7 +39,7 @@ public class AnticheatSystem {
 
     public static class ScanPlayerInput extends EntityTickingSystem<EntityStore> {
         @Nonnull
-        private final Query<EntityStore> query = Query.and(Player.getComponentType(), PlayerInput.getComponentType(), TransformComponent.getComponentType());
+        private final Query<EntityStore> query = Query.and(Player.getComponentType(), PlayerInput.getComponentType(), TransformComponent.getComponentType(), MovementManager.getComponentType());
         private final Set<Dependency<EntityStore>> deps = Set.of(
                 new SystemDependency<>(Order.BEFORE, PlayerSystems.ProcessPlayerInput.class),
                 new SystemDependency<>(Order.BEFORE, PlayerSystems.BlockPausedMovementSystem.class),
@@ -71,10 +72,12 @@ public class AnticheatSystem {
             var playerInputComponent = archetypeChunk.getComponent(index, PlayerInput.getComponentType());
             var playerComponent = archetypeChunk.getComponent(index, Player.getComponentType());
             var transformComponent = archetypeChunk.getComponent(index, TransformComponent.getComponentType());
+            var movementManager = archetypeChunk.getComponent(index, MovementManager.getComponentType());
             var movementStatesComponent = archetypeChunk.getComponent(index, MovementStatesComponent.getComponentType());
 
             assert playerInputComponent != null;
             assert playerComponent != null;
+            assert movementManager != null;
 
 //            LOGGER.atInfo().log("Starting anticheat scan tick for " + playerComponent.getDisplayName());
 
@@ -89,23 +92,42 @@ public class AnticheatSystem {
 
             var movementUpdateQueue = playerInputComponent.getMovementUpdateQueue();
             List<PlayerInput.InputUpdate> toRemove = new ArrayList<>();
+            
+            // We need to track where the player is supposed to be as we process their moves
+            // We start with their actual position at the beginning of this update
+            var virtualPosition = transformComponent.getPosition().clone();
+
+            // We also need to track their movement state as it might change during the update batch
+            var currentMovementStates = movementStatesComponent.getMovementStates();
 
             for (PlayerInput.InputUpdate entry : movementUpdateQueue) {
                 switch (entry) {
                     case PlayerInput.RelativeMovement relativeMovement:
-                        // possibly not used?
+                        // accumulated relative movement
+                        virtualPosition.add(relativeMovement.getX(), relativeMovement.getY(), relativeMovement.getZ());
                         break;
                     case PlayerInput.AbsoluteMovement absoluteMovement:
-                        var moveCheckFailed = checkInvalidAbsoluteMovementPacket(absoluteMovement, transformComponent, movementStatesComponent, dt);
+                        // Check if this move is valid based on where we last confirmed they were
+                        // We compare against the 'virtual' position not where they started the tick
+                        var moveCheckFailed = checkInvalidAbsoluteMovementPacket(absoluteMovement, virtualPosition, currentMovementStates, movementManager, dt);
+                        
                         if (moveCheckFailed) {
                             cancelInputUpdate(entry, toRemove, archetypeChunk, store, commandBuffer, index);
-                            // TODO: emit event for failed anitcheat check
+                            // TODO: Send an event here to signal that the player failed the anticheat check.
+                        } else {
+                            // Valid movement update our virtual position for the next packet check
+                            virtualPosition.x = absoluteMovement.getX();
+                            virtualPosition.y = absoluteMovement.getY();
+                            virtualPosition.z = absoluteMovement.getZ();
                         }
                         break;
                     case PlayerInput.SetMovementStates movementStates:
+                        // Update our local tracking of the player's state
+                        currentMovementStates = movementStates.movementStates();
+
                         if (movementStates.movementStates().flying) {
                             cancelInputUpdate(entry, toRemove, archetypeChunk, store, commandBuffer, index);
-                            // TODO: emit event for failed anitcheat check
+                            // TODO: Send an event here to signal that the player failed the anticheat check
 //                            var playerRef = archetypeChunk.getReferenceTo(index);
 //                            var playerRefComponent = commandBuffer.getComponent(playerRef, PlayerRef.getComponentType());
 //                            kickPlayer(playerRefComponent, "Kicked for flying");
@@ -119,7 +141,7 @@ public class AnticheatSystem {
         }
     }
 
-    // TODO: figure out how to kick player from server in an ECS System
+    // TODO: Need to find the right way to kick a player using this ECS system
     private static void kickPlayer(PlayerRef ref, String reason) {
         HytaleServer
                 .get()
@@ -128,37 +150,72 @@ public class AnticheatSystem {
                 .dispatch(new RemoveCheatingPlayerEvent(ref, reason));
     }
 
-    // TODO: probably want to make this return an enum of what check failed for downstream or move checks to some sort of abstract interface
-    private static boolean checkInvalidAbsoluteMovementPacket(PlayerInput.AbsoluteMovement absoluteMovement, TransformComponent transformComponent, MovementStatesComponent movementStatesComponent, float deltaTime) {
-        var movementStates = movementStatesComponent.getMovementStates();
+    // TODO: Eventually we should return more specific info like "SPEED_1" instead of just true/false
+    private static boolean checkInvalidAbsoluteMovementPacket(PlayerInput.AbsoluteMovement absoluteMovement, Vector3d previousPosition, MovementStates movementStates, MovementManager movementManager, float deltaTime) {
 
+
+        if (movementStates.mantling) {
+            return false;
+        }
+
+        var settings = movementManager.getSettings();
+
+        // New Position (Target)
         var newPosition = new Vector3d(absoluteMovement.getX(), absoluteMovement.getY(), absoluteMovement.getZ());
-        var oldPosition = transformComponent.getPosition();
-        var movementDelta = newPosition.subtract(oldPosition);
-        var movementDistance = movementDelta.length();
-        var movementSpeed = movementDistance / deltaTime;
+        
+        // Deltas (compared to previous validated position)
+        var delta = newPosition.clone().subtract(previousPosition);
+        
+        // 1. Check horizontal movement (walking, running, etc.)
+        var lateralDelta = new Vector3d(delta.x, 0, delta.z);
+        var lateralDistance = lateralDelta.length();
+        var lateralSpeed = lateralDistance / deltaTime; // Units per second
 
-        var newLateralPosition = new Vector3d(absoluteMovement.getX(), absoluteMovement.getY(), absoluteMovement.getZ());
-        newLateralPosition.y = 0;
-        var oldLateralPosition = transformComponent.getPosition().clone();
-        oldLateralPosition.y = 0;
-        var lateralMovementDelta = newLateralPosition.subtract(oldLateralPosition);
-        var lateralMovementDistance = lateralMovementDelta.length();
-        var lateralMovementSpeed = lateralMovementDistance / deltaTime;
-
-        var verticalMovementSpeed = movementSpeed - lateralMovementSpeed;
-
-
-
-        if (lateralMovementSpeed > 15.0) {
-            // failed lateral speed check
-
-            return true;
+        double maxLateralSpeed;
+        if (movementStates.flying) {
+            maxLateralSpeed = settings.horizontalFlySpeed;
+        } else {
+            // Calculate the max valid speed based on their base speed and sprint multipliers
+            // We use the sprint multiplier to be safe and avoid false positives
+            maxLateralSpeed = settings.baseSpeed * settings.forwardSprintSpeedMultiplier;
         }
-        if (verticalMovementSpeed > 60.0 && !movementStates.falling) {
-            // failed vertical speed check
-            return true;
+        
+        // Add a buffer to account for lag or something
+        double lateralLimit = (maxLateralSpeed * 1.3) + 2.0;
+
+        if (lateralSpeed > lateralLimit) {
+             // LOGGER.atInfo().log("Failed lateral speed: " + lateralSpeed + " > " + lateralLimit);
+             return true;
         }
+
+        // 2. Check vertical movement (jumping/falling)
+        var verticalDistance = Math.abs(delta.y);
+        var verticalSpeed = verticalDistance / deltaTime;
+
+        double maxVerticalSpeed;
+        if (movementStates.flying) {
+            maxVerticalSpeed = settings.verticalFlySpeed;
+        } else {
+            if (delta.y > 0) { // Jumping / Going up
+                 // When jumping their speed shouldnt exceed the jump force
+                 maxVerticalSpeed = settings.jumpForce;
+            } else { // Falling
+                 // Just a loose cap for falling speed for now
+                 maxVerticalSpeed = 60.0;
+            }
+        }
+
+        // Add robustness buffer
+        double verticalLimit = (maxVerticalSpeed * 1.3) + 2.0;
+
+        if (verticalSpeed > verticalLimit && !movementStates.falling) {
+             // If they are falling they might be moving faster than normal
+             // But if they aren't marked as 'falling' and are moving this fast it's likely a movement exploit
+             
+             // LOGGER.atInfo().log("Failed vertical speed: " + verticalSpeed + " > " + verticalLimit);
+             return true;
+        }
+        
         return false;
     }
 
@@ -192,41 +249,5 @@ public class AnticheatSystem {
 
         playerRefComponent.getPacketHandler().write(teleportPacket);
         playerRefComponent.getPacketHandler().write(statePacket);
-
-
-//        var teleport = new Teleport(position, rotation).withHeadRotation(headRotation);
-//        store.addComponent(playerRef, Teleport.getComponentType(), teleport);
-
-        /*
-        switch (inputUpdate) {
-            case PlayerInput.AbsoluteMovement absoluteMovement:
-                playerComponent.moveTo(playerRef, position.x, position.y, position.z, commandBuffer);
-                break;
-            case PlayerInput.RelativeMovement relativeMovement:
-                playerComponent.moveTo(playerRef, position.x, position.y, position.z, commandBuffer);
-                break;
-            case PlayerInput.SetBody body:
-                rotation.assign(rotation);
-                break;
-            case PlayerInput.SetClientVelocity clientVelocity:
-                velocityComponent.setClient(velocityComponent.getVelocity());
-                break;
-            case PlayerInput.SetHead head:
-                headRotation.assign(rotation.x, rotation.y, rotation.z);
-                break;
-            case PlayerInput.SetMovementStates movementStates:
-                // TODO: this may not update client of new movement states
-                movementStatesComponent.setMovementStates(movementStates.movementStates());
-                break;
-            case PlayerInput.SetRiderMovementStates riderMovementStates:
-                // does nothing in Hytale natively
-                break;
-            case PlayerInput.WishMovement wishMovement:
-                // does nothing in Hytale natively
-                break;
-            default:
-                break;
-        }
-         */
     }
 }
