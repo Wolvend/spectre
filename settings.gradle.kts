@@ -1,1 +1,1 @@
-rootProject.name = "anticheat"
+rootProject.name = "spectre"
