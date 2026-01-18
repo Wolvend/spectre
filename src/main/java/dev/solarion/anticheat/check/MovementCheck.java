@@ -6,9 +6,28 @@ import com.hypixel.hytale.protocol.MovementStates;
 
 public class MovementCheck {
 
+    public static final double MAX_STEP_HEIGHT = 1.1;
+
     // TODO: Eventually we should return more specific info like "SPEED_1" instead of just true/false
     public static boolean checkInvalidAbsoluteMovementPacket(double x, double y, double z, Vector3d previousPosition, MovementStates movementStates, MovementManager movementManager, float deltaTime) {
 
+        // Allows auto step-up teleporting
+        // The client teleports up by 1 block when performing an auto step-up.
+        // The client stays on ground when stepping up so we make sure to check for that.
+        if (movementStates.onGround && !movementStates.mantling) {
+            double deltaY = y - previousPosition.y;
+
+            if (deltaY > 0 && deltaY <= MAX_STEP_HEIGHT) {
+                return false;
+            }
+        }
+
+        // Disallows the mantle-into-ceiling warp glitch
+        if (movementStates.onGround && movementStates.mantling) {
+            return true;
+        }
+
+        // Fix to allow mantling
         if (movementStates.mantling) {
             return false;
         }
@@ -50,7 +69,7 @@ public class MovementCheck {
             maxVerticalSpeed = settings.verticalFlySpeed;
         } else {
             if (deltaY > 0) { // Jumping / Going up
-                // When jumping their speed shouldnt exceed the jump force
+                // When jumping their speed shouldn't exceed the jump force
                 maxVerticalSpeed = settings.jumpForce;
             } else { // Falling
                 // Just a loose cap for falling speed for now
@@ -74,6 +93,6 @@ public class MovementCheck {
         }
 
         // Add a buffer to account for lag or something
-        return (maxLateralSpeed * 1.3) + 2.0;
+        return (maxLateralSpeed * 1.3) + 4.0;
     }
 }
