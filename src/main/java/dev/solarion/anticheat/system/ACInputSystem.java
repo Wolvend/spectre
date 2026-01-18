@@ -138,7 +138,7 @@ public class ACInputSystem extends EntityTickingSystem<EntityStore> {
                         var playerRef = archetypeChunk.getReferenceTo(index);
                         var playerRefComponent = commandBuffer.getComponent(playerRef, PlayerRef.getComponentType());
 //                        if (playerRefComponent != null) {
-//                            kickPlayer(playerRefComponent, "Kicked for flying");
+//                            removePlayer(playerRefComponent, "Kicked for flying");
 //                        }
                     }
                     break;
@@ -149,14 +149,14 @@ public class ACInputSystem extends EntityTickingSystem<EntityStore> {
         movementUpdateQueue.removeAll(toRemove);
     }
 
-// TODO: Need to find the right way to kick a player using this ECS system
-//    private static void kickPlayer(PlayerRef ref, String reason) {
-//        HytaleServer
-//                .get()
-//                .getEventBus()
-//                .dispatchForAsync(RemoveCheatingPlayerEvent.class)
-//                .dispatch(new RemoveCheatingPlayerEvent(ref, reason));
-//    }
+    // TODO: ensure player has not already been queued for removal
+    private static void removePlayer(PlayerRef ref, String reason) {
+        HytaleServer
+                .get()
+                .getEventBus()
+                .dispatchForAsync(RemoveCheatingPlayerEvent.class)
+                .dispatch(new RemoveCheatingPlayerEvent(ref, reason));
+    }
 
     private static void cancelInputUpdate(PlayerInput.InputUpdate inputUpdate,
                                           List<PlayerInput.InputUpdate> removalQueue,

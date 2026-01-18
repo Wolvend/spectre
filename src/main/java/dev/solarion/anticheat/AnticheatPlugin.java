@@ -3,7 +3,7 @@ package dev.solarion.anticheat;
 import com.hypixel.hytale.logger.HytaleLogger;
 import com.hypixel.hytale.server.core.plugin.JavaPlugin;
 import com.hypixel.hytale.server.core.plugin.JavaPluginInit;
-import dev.solarion.anticheat.event.KickPlayerEvent;
+import dev.solarion.anticheat.event.KickPlayerOnRemove;
 import dev.solarion.anticheat.event.RemoveCheatingPlayerEvent;
 import dev.solarion.anticheat.system.ACInputSystem;
 
@@ -20,7 +20,7 @@ public class AnticheatPlugin extends JavaPlugin {
     protected void setup() {
         LOGGER.atInfo().log("Setting up Anticheat");
 
-        this.getEventRegistry().registerGlobal(RemoveCheatingPlayerEvent.class, KickPlayerEvent::onRemoveCheatingPlayerEvent);
+        this.getEventRegistry().registerGlobal(RemoveCheatingPlayerEvent.class, KickPlayerOnRemove::onRemoveCheatingPlayerEvent);
         this.getEntityStoreRegistry().registerSystem(new ACInputSystem());
     }
 }
