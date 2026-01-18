@@ -1,7 +1,6 @@
-package dev.solarion.anticheat.events;
+package dev.solarion.anticheat.event;
 
 import com.hypixel.hytale.event.IAsyncEvent;
-import com.hypixel.hytale.event.IEvent;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
 
 import javax.annotation.Nonnull;

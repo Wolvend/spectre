@@ -1,6 +1,4 @@
-package dev.solarion.anticheat.events;
-
-import com.hypixel.hytale.server.core.event.events.player.PlayerEvent;
+package dev.solarion.anticheat.event;
 
 public class KickPlayerEvent
 {
